@@ -3,6 +3,7 @@ const io = require('socket.io-client')
 const mediasoupClient = require('mediasoup-client')
 
 const roomName = window.location.pathname.split('/')[2]
+console.log(roomName)
 
 const socket = io("/mediasoup")
 
@@ -15,8 +16,7 @@ let device
 let rtpCapabilities
 let producerTransport
 let consumerTransports = []
-let audioProducer
-let videoProducer
+let producer
 let consumer
 let isProducer = false
 
@@ -47,15 +47,13 @@ let params = {
   }
 }
 
-let audioParams;
-let videoParams = { params };
-let consumingTransports = [];
-
 const streamSuccess = (stream) => {
   localVideo.srcObject = stream
-
-  audioParams = { track: stream.getAudioTracks()[0], ...audioParams };
-  videoParams = { track: stream.getVideoTracks()[0], ...videoParams };
+  const track = stream.getVideoTracks()[0]
+  params = {
+    track,
+    ...params
+  }
 
   joinRoom()
 }
@@ -74,7 +72,7 @@ const joinRoom = () => {
 
 const getLocalStream = () => {
   navigator.mediaDevices.getUserMedia({
-    audio: true,
+    audio: false,
     video: {
       width: {
         min: 640,
@@ -86,13 +84,13 @@ const getLocalStream = () => {
       }
     }
   })
-  .then(streamSuccess)
-  .catch(error => {
-    console.log(error.message)
-  })
+    .then(streamSuccess)
+    .catch(error => {
+      console.log(error.message)
+    })
 }
 
-// A device is an endpoint connecting to a Router on the
+// A device is an endpoint connecting to a Router on the 
 // server side to send/recive media
 const createDevice = async () => {
   try {
@@ -117,9 +115,7 @@ const createDevice = async () => {
   }
 }
 
-/*Send Transport를 생성하는 함수로 클라이언트 측에서 소켓 통신을 통해 서버에 send Transport생성을 요청하고, 
-서버로 부터 필요한 매개변수를 받아와 send Transport를 생성한다.*/
-const createSendTransport = () => { //
+const createSendTransport = () => {
   // see server's socket.on('createWebRtcTransport', sender?, ...)
   // this is a call from Producer, so sender = true
   socket.emit('createWebRtcTransport', { consumer: false }, ({ params }) => {
@@ -135,12 +131,12 @@ const createSendTransport = () => { //
     // creates a new WebRTC Transport to send media
     // based on the server's producer transport params
     // https://mediasoup.org/documentation/v3/mediasoup-client/api/#TransportOptions
-    producerTransport = device.createSendTransport(params) //서버로부터 받은 'params'를 사용하여 mediasoup의 'device.createSendTranasport()' 메서드를 호출하여 Send Transport 객체를 생성
+    producerTransport = device.createSendTransport(params)
 
     // https://mediasoup.org/documentation/v3/communication-between-client-and-server/#producing-media
     // this event is raised when a first call to transport.produce() is made
     // see connectSendTransport() below
-    producerTransport.on('connect', async ({ dtlsParameters }, callback, errback) => { //클라이언트 측에서 서버에 dtls 매개변수를 전달하기 위해 사용
+    producerTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
       try {
         // Signal local DTLS parameters to the server side transport
         // see server's socket.on('transport-connect', ...)
@@ -190,40 +186,22 @@ const connectSendTransport = async () => {
   // to send media to the Router
   // https://mediasoup.org/documentation/v3/mediasoup-client/api/#transport-produce
   // this action will trigger the 'connect' and 'produce' events above
-  
-  audioProducer = await producerTransport.produce(audioParams);
-  videoProducer = await producerTransport.produce(videoParams);
+  producer = await producerTransport.produce(params)
 
-  audioProducer.on('trackended', () => {
-    console.log('audio track ended')
-
-    // close audio track
-  })
-
-  audioProducer.on('transportclose', () => {
-    console.log('audio transport ended')
-
-    // close audio track
-  })
-  
-  videoProducer.on('trackended', () => {
-    console.log('video track ended')
+  producer.on('trackended', () => {
+    console.log('track ended')
 
     // close video track
   })
 
-  videoProducer.on('transportclose', () => {
-    console.log('video transport ended')
+  producer.on('transportclose', () => {
+    console.log('transport ended')
 
     // close video track
   })
 }
 
 const signalNewConsumerTransport = async (remoteProducerId) => {
-  //check if we are already consuming the remoteProducerId
-  if (consumingTransports.includes(remoteProducerId)) return;
-  consumingTransports.push(remoteProducerId);
-
   await socket.emit('createWebRtcTransport', { consumer: true }, ({ params }) => {
     // The server sends back params needed 
     // to create Send Transport on the client side
@@ -312,20 +290,13 @@ const connectRecvTransport = async (consumerTransport, remoteProducerId, serverC
     ]
 
     // create a new div element for the new consumer media
+    // and append to the video container
     const newElem = document.createElement('div')
     newElem.setAttribute('id', `td-${remoteProducerId}`)
-
-    if (params.kind == 'audio') {
-      //append to the audio container
-      newElem.innerHTML = '<audio id="' + remoteProducerId + '" autoplay></audio>'
-    } else {
-      //append to the video container
-      newElem.setAttribute('class', 'remoteVideo')
-      newElem.innerHTML = '<video id="' + remoteProducerId + '" autoplay class="video" ></video>'
-    }
-
+    newElem.setAttribute('class', 'remoteVideo')
+    newElem.innerHTML = '<video id="' + remoteProducerId + '" autoplay class="video" ></video>'
     videoContainer.appendChild(newElem)
-
+  
     // destructure and retrieve the video track from the producer
     const { track } = consumer
 
